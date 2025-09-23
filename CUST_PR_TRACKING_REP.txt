@@ -1,0 +1,131 @@
+SELECT distinct *
+  FROM (SELECT   pr_number, pr_date, description, uom, pr_approval_date, Pr_Quantity,
+                 po_number, po_date, po_approval_date, Po_Quantity, Recieve_Quantity, receipt_number,
+                 receipt_date, inspection_date, deliver_date,
+                 NVL (days_in_pr_approval, 0) days_in_pr_approval,
+                 NVL (days_in_po_approval, 0) days_in_po_approval,
+                 NVL (pr_delivery_days, 0) pr_delivery_days,
+                 NVL (po_delivery_days, 0) po_delivery_days,
+                 NVL (days_in_inspection, 0) days_in_inspection,
+                   -1
+                 * NVL (TO_DATE (inspection_date) - TO_DATE (deliver_date), 0)
+                                                   days_in_complete_receiving,
+                   -1
+                 * NVL (TO_DATE (pr_date) - TO_DATE (deliver_date), 0)
+                                                             days_in_pr_to_rv
+            FROM (SELECT prh.segment1 pr_number,
+                         TO_CHAR (prh.creation_date, 'DD-MON-YYYY') pr_date,
+                         msi.description, msi.PRIMARY_UOM_CODE uom,
+                         TO_CHAR (prh.approved_date,
+                                  'DD-MON-YYYY'
+                                 ) pr_approval_date,
+                         pha.segment1 po_number,
+                         TO_CHAR (pha.creation_date, 'DD-MON-YYYY') po_date,
+                         TO_CHAR (pha.approved_date,
+                                  'DD-MON-YYYY'
+                                 ) po_approval_date,
+                         rsh.receipt_num receipt_number,
+                         TO_CHAR (rsh.creation_date,
+                                  'DD-MON-YYYY'
+                                 ) receipt_date,
+                         CASE
+                            WHEN rt.inspection_status_code =
+                                                   'ACCEPTED'
+                               THEN TO_CHAR
+                                        (rt.transaction_date,
+                                         'DD-MON-YYYY'
+                                        )
+                         END inspection_date,
+                         CASE
+                            WHEN rt.transaction_type = 'DELIVER'
+                               THEN TO_CHAR
+                                           (rt.transaction_date,
+                                            'DD-MON-YYYY'
+                                           )
+                         END deliver_date,
+                           -1
+                         * (  TO_DATE (prh.creation_date)
+                            - TO_DATE (prh.approved_date)
+                           ) days_in_pr_approval,
+                           -1
+                         * (  TO_DATE (prh.approved_date)
+                            - TO_DATE (pha.creation_date)
+                           ) days_in_po_initiation,
+                           -1
+                         * (  TO_DATE (prh.approved_date)
+                            - TO_DATE (pha.approved_date)
+                           ) days_in_po_approval,
+                           -1
+                         * (  TO_DATE (prh.approved_date)
+                            - TO_DATE (rsh.creation_date)
+                           ) pr_delivery_days,
+                           -1
+                         * (  TO_DATE (pha.approved_date)
+                            - TO_DATE (rsh.creation_date)
+                           ) po_delivery_days,
+                         CASE
+                            WHEN rt.inspection_status_code =
+                                                'ACCEPTED'
+                               THEN   -1
+                                    * (  TO_DATE (rt.transaction_date)
+                                       - TO_DATE (rsh.creation_date)
+                                      )
+                         END days_in_inspection,
+                          (prl.QUANTITY) Pr_quantity,
+                          (prl.QUANTITY_DELIVERED) Recieve_Quantity,
+                          (pla.QUANTITY) Po_Quantity
+                    FROM apps.po_requisition_headers_all prh,
+                         apps.po_requisition_lines_all prl,
+                         apps.mtl_system_items msi,
+                         apps.mtl_system_items_kfv msik,
+                         apps.po_req_distributions_all prd,
+                         apps.po_distributions_all pda,
+                         apps.po_lines_all pla,
+                         apps.po_headers_all pha,
+                         apps.po_line_locations_all plla,
+                         apps.rcv_shipment_lines rsl,
+                         apps.rcv_shipment_headers rsh,
+                         apps.rcv_transactions rt
+                   WHERE 1 = 1
+                     AND prh.requisition_header_id = prl.requisition_header_id
+                     AND prl.item_id = msi.inventory_item_id
+                     AND prl.destination_organization_id = msi.organization_id
+                     AND msi.inventory_item_id = msik.inventory_item_id
+                     AND msi.organization_id = msik.organization_id
+                     AND prl.requisition_line_id = prd.requisition_line_id
+                     AND prd.distribution_id = pda.req_distribution_id(+)
+                     AND pla.po_header_id(+) = pda.po_header_id
+                     AND pla.po_line_id(+) = pda.po_line_id
+                     AND pha.po_header_id(+) = pla.po_header_id
+                     AND pha.type_lookup_code(+) = 'STANDARD'
+                     AND pla.po_line_id = plla.po_line_id(+)
+                     AND plla.line_location_id = rsl.po_line_location_id(+)
+                     AND rsl.shipment_header_id = rsh.shipment_header_id(+)
+                     AND rsl.shipment_header_id = rt.shipment_header_id(+)
+                     AND rsl.shipment_line_id = rt.shipment_line_id(+)
+                     AND pla.po_header_id = rt.po_header_id(+)
+                     AND pla.po_line_id = rt.po_line_id(+)
+                     AND pda.po_distribution_id = rt.po_distribution_id(+)
+                     AND pda.line_location_id = rt.po_line_location_id(+)
+                     AND msik.concatenated_segments
+                            BETWEEN NVL (:p_item_lo,
+                                         msik.concatenated_segments
+                                        )
+                                AND NVL (:p_item_hi,
+                                         msik.concatenated_segments
+                                        )
+                     AND msik.concatenated_segments =
+                                NVL (:p_item_desc, msik.concatenated_segments))
+        ORDER BY deliver_date) v
+ WHERE     1 = 1
+       AND TO_DATE (v.pr_date) BETWEEN NVL (TO_DATE (:pr_from_date),
+                                            TO_DATE (pr_date)
+                                           )
+                                   AND NVL (TO_DATE (:pr_to_date),
+                                            TO_DATE (pr_date)
+                                           )
+    OR TO_DATE (po_date) BETWEEN NVL (TO_DATE (:po_from_date),
+                                      TO_DATE (po_date)
+                                     )
+                             AND NVL (TO_DATE (:po_to_date),
+                                      TO_DATE (po_date))
