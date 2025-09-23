@@ -1,0 +1,113 @@
+SELECT NVL(opening_balance, 0) opening_balance, period_name
+  FROM (SELECT   '1' order_by,
+                 NVL(SUM(gb.begin_balance_dr_beq), 0) opening_dr,
+                 NVL(SUM(gb.begin_balance_cr_beq), 0) opening_cr,
+                 (  NVL(SUM(gb.begin_balance_dr_beq), 0)
+                  - NVL(SUM(gb.begin_balance_cr_beq), 0)
+                 ) opening_balance,
+                 gb.period_name
+            FROM apps.gl_balances gb, gl_code_combinations gcc
+           WHERE gb.code_combination_id = gcc.code_combination_id
+             AND gb.ledger_id = 2021
+             AND gb.actual_flag = 'A'
+             AND UPPER(TO_CHAR(gb.period_name)) = UPPER(TO_CHAR(NVL(:p_Month, gb.period_name)))
+             AND gb.currency_code = 'PKR'
+             AND gb.period_type = 21
+             AND TO_CHAR(gcc.code_combination_id) IN (
+                    SELECT TO_CHAR(gcck.code_combination_id)
+                      FROM ce_bank_accounts cba,
+                           gl_code_combinations_kfv gcck
+                     WHERE gcck.code_combination_id = cba.asset_code_combination_id
+                       AND TO_CHAR(cba.bank_account_num) = TO_CHAR(NVL(:p_bank_acc, cba.bank_account_num)))
+  GROUP BY gb.period_name)
+ WHERE opening_dr <> 0 OR opening_cr <> 0 OR opening_balance <> 0;
+
+
+
+
+
+SELECT aca.check_date, 
+       NVL(aca.amount, 0) amount,
+       aca.check_voucher_num voucher_number, 
+       aca.status_lookup_code status, 
+       aca.CHECK_NUMBER cheque_number, 
+       csh.STATEMENT_NUMBER, 
+       cba.BANK_ACCOUNT_NUM
+FROM ce_bank_accounts cba, 
+     ap_checks_all aca, 
+     CE_STATEMENT_HEADERS csh
+WHERE cba.bank_account_name = aca.bank_account_name
+  AND cba.bank_account_num = TO_CHAR(NVL(:p_bank_acc, cba.bank_account_num))
+  AND cba.BANK_ACCOUNT_ID = csh.BANK_ACCOUNT_ID
+  AND csh.STATEMENT_NUMBER = TO_CHAR(NVL(:p_statement, csh.STATEMENT_NUMBER))
+  AND aca.status_lookup_code = 'NEGOTIABLE'
+  AND (
+      -- Handle full year format (JAN-2025)
+      TO_CHAR(aca.check_date, 'MON-YYYY') = :p_Month
+      OR
+      -- Handle short year format (JAN-25)
+      TO_CHAR(aca.check_date, 'MON-YY') = :p_Month
+      OR
+      -- Handle case when parameter is null
+      :p_Month IS NULL
+  )
+ORDER BY aca.CHECK_DATE
+
+
+
+ --Q3
+  SELECT csh.statement_number, csl.TRX_DATE, csl.bank_trx_number Check_NO, NVL(csl.amount, 0) Amount,
+       csl.status
+  FROM ce_statement_headers csh, ce_statement_lines csl, ce_bank_accounts cba
+ WHERE 1 = 1
+   AND csh.statement_header_id = csl.statement_header_id
+   and csh.BANK_ACCOUNT_ID = cba.BANK_ACCOUNT_ID
+   AND csl.status = 'UNRECONCILED'
+   AND csl.TRX_TYPE IN ('DEBIT', 'SWEEP_OUT')  -- payment = debit
+   AND csh.statement_number = NVL(:p_statement, csh.statement_number)
+   AND cba.bank_account_num = TO_CHAR(NVL(:p_bank_acc, cba.bank_account_num))
+   order by csl.TRX_DATE
+
+
+
+
+--Q4
+   SELECT csh.statement_number, csl.TRX_DATE, csl.bank_trx_number Check_no, NVL(csl.amount, 0) Amount, csl.TRX_TYPE,
+       csl.status
+  FROM ce_statement_headers csh, ce_statement_lines csl, ce_bank_accounts cba
+ WHERE 1 = 1
+   and csh.BANK_ACCOUNT_ID = cba.BANK_ACCOUNT_ID
+   AND csh.statement_header_id = csl.statement_header_id
+   AND csl.status = 'UNRECONCILED'
+   AND csl.TRX_TYPE IN ('CREDIT', 'MISC_CREDIT', 'SWEEP_IN') -- reciept = credit
+   AND csh.statement_number = TO_CHAR(NVL(:p_statement, csh.statement_number))
+   AND cba.bank_account_num = TO_CHAR(NVL(:p_bank_acc, cba.bank_account_num))
+   order by csl.TRX_DATE
+
+
+
+SELECT arc.CREATION_DATE,
+     arc.NAME,
+     arc.CREATION_STATUS,
+     CR.RECEIPT_NUMBER CHEQUE_NUMBER,
+     CR.DOC_SEQUENCE_VALUE VOUCHER_NUMBER,
+    NVL( ACRHA.AMOUNT, 0) Amount,
+     cba.BANK_ACCOUNT_NAME,
+     cba.BANK_ACCOUNT_NUM,
+     csh.STATEMENT_NUMBER
+FROM ar_cash_receipts_all cr,
+     ce_bank_acct_uses_all remit_bank,
+     ce_bank_accounts cba,
+     AR_CASH_RECEIPT_HISTORY_ALL acrha,
+     ar_receipt_classes arc,
+     AR_RECEIPT_METHODS arm,
+     CE_STATEMENT_HEADERS csh
+WHERE arc.RECEIPT_CLASS_ID = arm.RECEIPT_CLASS_ID 
+     and arm.RECEIPT_METHOD_ID = cr.RECEIPT_METHOD_ID
+  and remit_bank.bank_acct_use_id(+) = cr.remit_bank_acct_use_id
+  AND remit_bank.org_id(+) = cr.org_id
+  AND remit_bank.bank_account_id = cba.bank_account_id(+)
+  and CR.CASH_RECEIPT_ID = ACRHA.CASH_RECEIPT_ID AND CR.AMOUNT = ACRHA.AMOUNT 
+  and cba.BANK_ACCOUNT_ID = csh.BANK_ACCOUNT_ID
+  AND ARC.CREATION_STATUS = 'REMITTED'
+  AND csh.statement_number = TO_CHAR(NVL(:p_statement, csh.statement_number))
