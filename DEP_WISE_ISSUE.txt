@@ -1,0 +1,41 @@
+select DISTINCT msi.inventory_item_id, msi.description,  msik.concatenated_segments, mtrh.HEADER_ID, msi.organization_id, msi.segment3, 
+--mmt.TRANSACTION_DATE,
+(CASE WHEN mtrl.TO_SUBINVENTORY_CODE IN ('CKN', 'SKN', 'MZM', 'CKM', 'KHN', 'MZN', 'KHM', 'SKM') THEN oa.ORGANIZATION_NAME ELSE mtrl.TO_SUBINVENTORY_CODE END ) as "DEP/SUBINV/HNAME",
+-- mtrl.TO_SUBINVENTORY_CODE,
+               msi.segment3 "item_code", msi.primary_uom_code uom,
+                 mtrl.QUANTITY Demanded_Qty, 
+               mtrl.QUANTITY_DELIVERED Issued_Qty,
+                (SELECT ffv4.description
+          FROM fnd_flex_values_vl ffv4
+         WHERE msi.segment2 = ffv4.flex_value
+           AND ffv4.flex_value_set_id = 1018028) AS item_category,
+           (SELECT NVL (ROUND (cql.item_cost, 2), 0)
+                  FROM cst_quantity_layers cql
+                 WHERE cql.inventory_item_id =
+                                            msi.inventory_item_id
+                   AND cql.organization_id = msi.organization_id) AS avg_rate,
+            (( mtrl.QUANTITY_DELIVERED) * (SELECT NVL (ROUND (cql.item_cost, 2), 0)
+                  FROM cst_quantity_layers cql
+                 WHERE cql.inventory_item_id =
+                                            msi.inventory_item_id
+                   AND cql.organization_id = msi.organization_id)) AS "Issued Value"
+FROM mtl_system_items msi, apps.mtl_system_items_kfv msik, mtl_material_transactions mmt, MTL_TXN_REQUEST_LINES mtrl, MTL_TXN_REQUEST_headers mtrh, org_access_v oa
+         WHERE 1 = 1
+           AND msi.inventory_item_id = msik.inventory_item_id
+           AND msi.organization_id = msik.organization_id
+           AND msi.inventory_item_id = mmt.inventory_item_id
+           AND msi.organization_id = mmt.organization_id
+           AND msi.INVENTORY_ITEM_ID = mtrl.INVENTORY_ITEM_ID
+           and msi.ORGANIZATION_ID = mtrl.ORGANIZATION_ID
+           and mtrl.HEADER_ID = mtrh.HEADER_ID
+           and mtrl.TO_SUBINVENTORY_CODE = oa.ORGANIZATION_CODE(+)
+           AND mmt.transaction_type_id IN (63, 64)
+           AND msi.organization_id = NVL(:P_ORGS, msi.organization_id)
+           and msik.CONCATENATED_SEGMENTS between nvl(:P_ITEM_LO,msik.CONCATENATED_SEGMENTS) and nvl(:P_ITEM_HI,msik.CONCATENATED_SEGMENTS)
+--           and msik.DESCRIPTION = nvl(:p_item_desc,msik.DESCRIPTION)
+           and msik.CONCATENATED_SEGMENTS = nvl(:p_item_desc,msik.CONCATENATED_SEGMENTS)
+           AND mtrl.TO_SUBINVENTORY_CODE = NVL(:P_DEP, mtrl.TO_SUBINVENTORY_CODE)
+           AND TO_DATE(mmt.TRANSACTION_DATE) BETWEEN NVL(:p_date_from, mmt.TRANSACTION_DATE) AND NVL(:p_date_to, mmt.TRANSACTION_DATE)
+--           AND mtrh.HEADER_ID = :p_HID
+--           and  mmt.subinventory_code = NVL( :P_Subinv,  mmt.subinventory_code)
+           order by INVENTORY_ITEM_ID, mtrh.HEADER_ID
