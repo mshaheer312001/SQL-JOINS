@@ -1,0 +1,34 @@
+SELECT 
+    mtrh.request_number AS demand_no,
+    TO_CHAR(mtrh.date_required, 'DD-MON-YYYY') AS order_date,
+    CASE WHEN ROW_NUMBER() OVER (ORDER BY mtrh.request_number, msi.segment3) = 1 
+         THEN LPAD(FLOOR(DBMS_RANDOM.VALUE(1000, 9999)), 4, '0')
+         ELSE NULL END AS gate_pass_no,
+    SYSDATE AS dated,
+    LPAD(ROW_NUMBER() OVER (ORDER BY mtrh.request_number, msi.segment3), 4, '0') AS serial_no,
+    msi.description AS "Item Name",
+    msifv.DESCRIPTION AS "Dep Name",
+    :P_NUM_CARTONS AS "No_Of_Cartons",
+    mtrl.to_subinventory_code,
+    msi.SEGMENT3 AS item_code,
+    mtrl.quantity AS "Quantity Issued",
+    ffv5.description AS "Store Name"
+FROM 
+    mtl_txn_request_lines_v mtrl
+    JOIN mtl_txn_request_headers_v mtrh ON mtrl.header_id = mtrh.header_id
+    JOIN mtl_system_items msi ON mtrl.inventory_item_id = msi.inventory_item_id 
+                             AND mtrl.organization_id = msi.organization_id
+    JOIN mtl_system_items_kfv msik ON msi.inventory_item_id = msik.inventory_item_id 
+                                  AND msi.organization_id = msik.organization_id
+    JOIN mtl_secondary_inventories_fk_v msifv ON mtrl.to_subinventory_code = msifv.SECONDARY_INVENTORY_NAME 
+                                             AND mtrl.organization_id = msifv.organization_id
+    LEFT JOIN fnd_flex_values_vl ffv5 ON msi.segment1 = ffv5.flex_value
+                                     AND ffv5.flex_value_set_id = 1018027
+WHERE 
+    mtrh.request_number BETWEEN NVL(:p_order_from, mtrh.request_number) 
+                        AND NVL(:p_order_to, mtrh.request_number)
+    AND mtrh.date_required BETWEEN NVL(TO_DATE(:P_Date_from, 'DD-MON-YYYY'), mtrh.date_required)
+                            AND NVL(TO_DATE(:P_Date_to, 'DD-MON-YYYY'), mtrh.date_required)
+    AND TO_CHAR(mtrl.to_subinventory_code) = NVL(:P_SUBINV_CODE, mtrl.to_subinventory_code)
+ORDER BY 
+    mtrh.request_number, msi.segment3
