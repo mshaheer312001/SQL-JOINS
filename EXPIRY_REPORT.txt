@@ -1,0 +1,107 @@
+SELECT inventory_item_id,
+       concatenated_segments,
+       ITEM_CODE,
+       description,
+       uom,
+       on_hand_qty,
+       avg_rate,
+       (on_hand_qty * avg_rate)     AS "Value",
+       SUPPLIER,
+       BATCH_NO,
+       Expiry_Date,
+       Expiring_In_Days
+  FROM (  SELECT DISTINCT
+                 msi.inventory_item_id,
+                 msik.concatenated_segments,
+                 msi.segment3 ITEM_CODE,
+                 msi.description,
+                 msi.primary_uom_code
+                     uom,
+                 (SELECT TO_NUMBER (
+                             SUM (NVL (mmt.TRANSACTION_QUANTITY, 0)))
+                    FROM MTL_MATERIAL_TRANSACTIONS mmt
+                   WHERE     mmt.inventory_item_id =
+                             msi.inventory_item_id
+                         AND mmt.organization_id = msi.organization_id--               AND mmt.TRANSACTION_DATE <=
+                                                                      --                   NVL ( :p_date_from, mmt.TRANSACTION_DATE)
+                                                                      )
+                     AS on_hand_qty,
+                 NVL (
+                     (SELECT NVL (ROUND (cql.item_cost, 2), 0)
+                        FROM cst_quantity_layers cql
+                       WHERE     cql.inventory_item_id = msi.inventory_item_id
+                             AND cql.organization_id = msi.organization_id),
+                     0)
+                     AS avg_rate,
+                 --         (
+                 --            (SELECT NVL (ROUND (cql.item_cost, 2), 0)
+                 --          FROM cst_quantity_layers cql
+                 --         WHERE     cql.inventory_item_id = msi.inventory_item_id
+                 --               AND cql.organization_id = msi.organization_id) * (SELECT TO_NUMBER (SUM (NVL (mmt.TRANSACTION_QUANTITY, 0)))
+                 --          FROM MTL_MATERIAL_TRANSACTIONS mmt
+                 --         WHERE     mmt.inventory_item_id = msi.inventory_item_id
+                 --               AND mmt.organization_id = msi.organization_id
+                 ----               AND mmt.TRANSACTION_DATE <=
+                 ----                   NVL ( :p_date_from, mmt.TRANSACTION_DATE)
+                 --                   )
+                 --         )   Value_Rs,
+                  (SELECT aps.vendor_name
+                     FROM ap_suppliers  aps,
+                          po_headers_all pha,
+                          po_lines_all  pla
+                    WHERE     aps.vendor_id = pha.vendor_id
+                          AND pla.po_header_id = pha.po_header_id
+                          AND pla.item_id = msi.inventory_item_id
+                          AND aps.vendor_name =
+                              NVL ( :P_VENDOR, aps.vendor_name)
+                          AND aps.vendor_name IS NOT NULL
+                          AND ROWNUM = 1)                 -- Ensure single row
+                     AS "SUPPLIER",
+                 mtlv.LOT_NUMBER
+                     BATCH_NO,
+                 TO_DATE (mtlv.EXPIRATION_DATE)
+                     Expiry_Date,
+                 (CASE
+                      WHEN TRUNC (mtlv.expiration_date) >= TRUNC (SYSDATE)
+                      THEN
+                             TRUNC (mtlv.expiration_date) - TRUNC (SYSDATE)
+                          || ' DAYS LEFT IN EXPIRING'
+                      ELSE
+                             ABS (
+                                 TRUNC (mtlv.expiration_date) - TRUNC (SYSDATE))
+                          || ' DAYS AGO EXPIRED'
+                  END)
+                     Expiring_In_Days
+            FROM mtl_system_items         msi,
+                 mtl_system_items_kfv     msik,
+                 mtl_material_transactions mmt,
+                 MTL_TRANSACTION_LOT_VAL_V mtlv
+           WHERE     1 = 1
+                 AND msi.inventory_item_id = msik.inventory_item_id
+                 AND msi.organization_id = msik.organization_id
+                 AND msi.inventory_item_id = mmt.inventory_item_id
+                 AND msi.organization_id = mmt.organization_id
+                 AND mmt.TRANSACTION_ID = mtlv.TRANSACTION_ID
+                 AND msi.organization_id = NVL ( :P_ORGS, msi.organization_id)
+                 AND msik.CONCATENATED_SEGMENTS BETWEEN NVL (
+                                                            :P_ITEM_LO,
+                                                            msik.CONCATENATED_SEGMENTS)
+                                                    AND NVL (
+                                                            :P_ITEM_HI,
+                                                            msik.CONCATENATED_SEGMENTS)
+                 AND msik.CONCATENATED_SEGMENTS = NVL ( :p_item_desc, msik.CONCATENATED_SEGMENTS)
+                 AND TO_DATE (mtlv.expiration_date) BETWEEN NVL (
+                                                                :p_date_from,
+                                                                mtlv.expiration_date)
+                                                        AND NVL (
+                                                                :p_date_to,
+                                                                mtlv.expiration_date)
+        ORDER BY msi.description)
+ WHERE CASE
+           WHEN :P_VENDOR IS NOT NULL
+           THEN
+               CASE WHEN SUPPLIER = :P_VENDOR THEN 1 ELSE 0 END
+           ELSE
+               1  -- Return all records including NULLs when parameter is null
+       END =
+       1
